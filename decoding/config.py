@@ -10,7 +10,7 @@ DATA_TEST_DIR = os.path.join(REPO_DIR, "data_test")
 MODEL_DIR = os.path.join(REPO_DIR, "models")
 RESULT_DIR = os.path.join(REPO_DIR, "results")
 SCORE_DIR = os.path.join(REPO_DIR, "scores")
-
+CACHE_DIR = '/ossfs/workspace/act_cache'
 # GPT encoding model parameters
 
 TRIM = 5
