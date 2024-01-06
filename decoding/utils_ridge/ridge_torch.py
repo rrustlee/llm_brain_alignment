@@ -1,6 +1,7 @@
 #import scipy
 from functools import reduce
 import numpy as np
+import torch
 import logging
 from utils_ridge.utils import mult_diag, counter
 import random
@@ -8,7 +9,7 @@ import random
 
 zs = lambda v: (v-v.mean(0))/v.std(0) ## z-score function
 
-def ridge(stim, resp, alpha, singcutoff=1e-10, normalpha=False, n_pca=None):
+def ridge_torch(stim, resp, alpha, singcutoff=1e-10, normalpha=False, n_pca=None):
     """Uses ridge regression to find a linear transformation of [stim] that approximates
     [resp]. The regularization parameter is [alpha].
     Parameters
@@ -28,17 +29,23 @@ def ridge(stim, resp, alpha, singcutoff=1e-10, normalpha=False, n_pca=None):
     wt : array_like, shape (N, M)
         Linear regression weights.
     """
-    try:
-        U,S,Vh = np.linalg.svd(stim, full_matrices=False)
-    except np.linalg.LinAlgError:
-        from text.regression.svd_dgesvd import svd_dgesvd
-        U,S,Vh = svd_dgesvd(stim, full_matrices=False)
 
-    UR = np.dot(U.T, np.nan_to_num(resp))
+    # stim = torch.tensor(stim).cuda()
+    # resp = torch.tensor(resp).cuda()
+
+    U,S,Vh = torch.linalg.svd(stim, full_matrices=False)
+
+    if n_pca is not None:
+        U = U[:,:n_pca]
+        S = S[:n_pca]
+        Vh = Vh[:n_pca]
+        logger.info("Keeping %d singular values"%(n_pca))
+
+    UR = torch.matmul(U.T, resp)
     
     # Expand alpha to a collection if it's just a single value
     if isinstance(alpha, (float,int)):
-        alpha = np.ones(resp.shape[1]) * alpha
+        alpha = torch.ones(resp.shape[1]) * alpha
     
     # Normalize alpha by the LSV norm
     norm = S[0]
@@ -48,17 +55,19 @@ def ridge(stim, resp, alpha, singcutoff=1e-10, normalpha=False, n_pca=None):
         nalphas = alpha
 
     # Compute weights for each alpha
+    nalphas = nalphas.cpu().numpy()
     ualphas = np.unique(nalphas)
-    wt = np.zeros((stim.shape[1], resp.shape[1]))
+    wt = torch.zeros((stim.shape[1], resp.shape[1]))
     for ua in ualphas:
         selvox = np.nonzero(nalphas==ua)[0]
+        selvox = torch.tensor(selvox)
         #awt = reduce(np.dot, [Vh.T, np.diag(S/(S**2+ua**2)), UR[:,selvox]])
-        awt = Vh.T.dot(np.diag(S/(S**2+ua**2))).dot(UR[:,selvox])
-        wt[:,selvox] = awt
+        awt = Vh.T.matmul(torch.diag(S/(S**2+ua**2))).matmul(UR[:,selvox])
+        wt[:,selvox] = awt.to(wt.dtype).to(wt.device)
 
     return wt
 
-def ridge_corr(Rstim, Pstim, Rresp, Presp, alphas, normalpha=False, dtype=np.single, corrmin=0.2,
+def ridge_corr_torch(Rstim, Pstim, Rresp, Presp, alphas, normalpha=False, dtype=np.single, corrmin=0.2,
                singcutoff=1e-10, use_corr=True, n_pca=None, logger=logging.getLogger("ridge_corr")):
     """Uses ridge regression to find a linear transformation of [Rstim] that approximates [Rresp].
     Then tests by comparing the transformation of [Pstim] to [Presp]. This procedure is repeated
@@ -108,22 +117,18 @@ def ridge_corr(Rstim, Pstim, Rresp, Presp, alphas, normalpha=False, dtype=np.sin
     """
     ## Calculate SVD of stimulus matrix
     logger.info("Doing SVD...")
-    try:
-        U,S,Vh = np.linalg.svd(Rstim, full_matrices=False)
-    except np.linalg.LinAlgError as e:
-        logger.info("NORMAL SVD FAILED, trying more robust dgesvd..")
-        from text.regression.svd_dgesvd import svd_dgesvd
-        U,S,Vh = svd_dgesvd(Rstim, full_matrices=False)
 
+    U,S,Vh = torch.linalg.svd(Rstim, full_matrices=False)
+    
     if n_pca is not None:
         U = U[:,:n_pca]
         S = S[:n_pca]
         Vh = Vh[:n_pca]
-        logger.info("Keeped %d singular values"%(n_pca))
+        logger.info("Keeping %d singular values"%(n_pca))
     else:
         ## Truncate tiny singular values for speed
         origsize = S.shape[0]
-        ngoodS = np.sum(S>singcutoff)
+        ngoodS = torch.sum(S>singcutoff)
         nbad = origsize-ngoodS
         U = U[:,:ngoodS]
         S = S[:ngoodS]
@@ -141,8 +146,8 @@ def ridge_corr(Rstim, Pstim, Rresp, Presp, alphas, normalpha=False, dtype=np.sin
         nalphas = alphas
 
     ## Precompute some products for speed
-    UR = np.dot(U.T, Rresp) ## Precompute this matrix product for speed
-    PVh = np.dot(Pstim, Vh.T) ## Precompute this matrix product for speed
+    UR = torch.matmul(U.T, Rresp) ## Precompute this matrix product for speed
+    PVh = torch.matmul(Pstim, Vh.T) ## Precompute this matrix product for speed
     
     #Prespnorms = np.apply_along_axis(np.linalg.norm, 0, Presp) ## Precompute test response norms
     zPresp = zs(Presp)
@@ -152,7 +157,7 @@ def ridge_corr(Rstim, Pstim, Rresp, Presp, alphas, normalpha=False, dtype=np.sin
         #D = np.diag(S/(S**2+a**2)) ## Reweight singular vectors by the ridge parameter 
         D = S/(S**2+na**2) ## Reweight singular vectors by the (normalized?) ridge parameter
         
-        pred = np.dot(mult_diag(D, PVh, left=False), UR) ## Best (1.75 seconds to prediction in test)
+        pred = torch.matmul(mult_diag(D, PVh, left=False), UR) ## Best (1.75 seconds to prediction in test)
         # pred = np.dot(mult_diag(D, np.dot(Pstim, Vh.T), left=False), UR) ## Better (2.0 seconds to prediction in test)
         
         # pvhd = reduce(np.dot, [Pstim, Vh.T, D]) ## Pretty good (2.4 seconds to prediction in test)
@@ -170,15 +175,15 @@ def ridge_corr(Rstim, Pstim, Rresp, Presp, alphas, normalpha=False, dtype=np.sin
         else:
             ## Compute variance explained
             resvar = (Presp-pred).var(0)
-            Rcorr = np.clip(1-(resvar/Prespvar), 0, 1)
+            Rcorr = torch.clip(1-(resvar/Prespvar), 0, 1)
             
-        Rcorr[np.isnan(Rcorr)] = 0
-        Rcorrs.append(Rcorr)
+        # Rcorr[np.isnan(Rcorr)] = 0
+        Rcorrs.append(Rcorr.cpu().numpy())
         
         log_template = "Training: alpha=%0.3f, mean corr=%0.5f, max corr=%0.5f, over-under(%0.2f)=%d"
         log_msg = log_template % (a,
-                                  np.mean(Rcorr),
-                                  np.max(Rcorr),
+                                  Rcorr.mean(),
+                                  Rcorr.max(),
                                   corrmin,
                                   (Rcorr>corrmin).sum()-(-Rcorr>corrmin).sum())
         if logger is not None:
@@ -188,7 +193,7 @@ def ridge_corr(Rstim, Pstim, Rresp, Presp, alphas, normalpha=False, dtype=np.sin
     
     return Rcorrs
 
-def bootstrap_ridge(Rstim, Rresp, alphas, nboots, chunklen, nchunks, dtype=np.single,
+def bootstrap_ridge_torch(Rstim, Rresp, alphas, nboots, chunklen, nchunks, dtype=np.single,
                     corrmin=0.2, joined=None, singcutoff=1e-10, normalpha=False, single_alpha=False,
                     use_corr=True, logger=logging.getLogger("ridge_corr"), n_pca=None):
     """Uses ridge regression with a bootstrapped held-out set to get optimal alpha values for each response.
@@ -266,7 +271,7 @@ def bootstrap_ridge(Rstim, Rresp, alphas, nboots, chunklen, nchunks, dtype=np.si
         The indices of the training data that were used as "validation" for each bootstrap sample.
     """
     nresp, nvox = Rresp.shape
-    bestalphas = np.zeros((nboots, nvox))  ## Will hold the best alphas for each voxel
+    bestalphas = torch.zeros((nboots, nvox))  ## Will hold the best alphas for each voxel
     valinds = [] ## Will hold the indices into the validation data for each bootstrap
     
     Rcmats = []
@@ -288,19 +293,18 @@ def bootstrap_ridge(Rstim, Rresp, alphas, nboots, chunklen, nchunks, dtype=np.si
         PRresp = Rresp[heldinds,:]
         
         ## Run ridge regression using this test set
-        Rcmat = ridge_corr(RRstim, PRstim, RRresp, PRresp, alphas,
+        Rcmat = ridge_corr_torch(RRstim, PRstim, RRresp, PRresp, alphas,
                            dtype=dtype, corrmin=corrmin, singcutoff=singcutoff,
                            normalpha=normalpha, use_corr=use_corr, n_pca=n_pca)
         
         Rcmats.append(Rcmat)
     
     ## Find weights for each voxel
-    try:
-        U,S,Vh = np.linalg.svd(Rstim, full_matrices=False)
-    except np.linalg.LinAlgError as e:
-        logger.info("NORMAL SVD FAILED, trying more robust dgesvd..")
-        from text.regression.svd_dgesvd import svd_dgesvd
-        U,S,Vh = svd_dgesvd(Rstim, full_matrices=False)
+    U,S,Vh = torch.linalg.svd(Rstim, full_matrices=False)
+    # except np.linalg.LinAlgError as e:
+    #     logger.info("NORMAL SVD FAILED, trying more robust dgesvd..")
+    #     from text.regression.svd_dgesvd import svd_dgesvd
+    #     U,S,Vh = svd_dgesvd(Rstim, full_matrices=False)
 
     ## Normalize alpha by the Frobenius norm
     #frob = np.sqrt((S**2).sum()) ## Frobenius!
@@ -313,6 +317,9 @@ def bootstrap_ridge(Rstim, Rresp, alphas, nboots, chunklen, nchunks, dtype=np.si
         nalphas = alphas
 
     allRcorrs = np.dstack(Rcmats)
+
+    # return allRcorrs
+    # allRcorrs = torch.tensor(allRcorrs).cuda()
     if not single_alpha:
         logger.info("Finding best alpha for each response..")
         if joined is None:
@@ -322,7 +329,7 @@ def bootstrap_ridge(Rstim, Rresp, alphas, nboots, chunklen, nchunks, dtype=np.si
             valphas = nalphas[bestalphainds]
         else:
             ## Find best alpha for each group of voxels
-            valphas = np.zeros((nvox,))
+            valphas = torch.zeros((nvox,))
             for jl in joined:
                 jcorrs = allRcorrs[:,jl,:].mean(1).mean(1) ## Mean across voxels in the set, then mean across bootstraps
                 bestalpha = np.argmax(jcorrs)
@@ -336,11 +343,17 @@ def bootstrap_ridge(Rstim, Rresp, alphas, nboots, chunklen, nchunks, dtype=np.si
         logger.info("Best alpha = %0.3f"%bestalpha)
 
     logger.info("Computing weights for each response using entire training set..")
-    UR = np.dot(U.T, np.nan_to_num(Rresp))
-    wt = np.zeros((Rstim.shape[1], Rresp.shape[1]))
+    UR = torch.matmul(U.T, Rresp)
+    wt = torch.zeros((Rstim.shape[1], Rresp.shape[1]))#.cuda()
+    valphas = torch.tensor(valphas).cuda()
+
+    # print(valphas.shape)
+    # print(valphas)
+    # return valphas, allRcorrs
     for ai,alpha in enumerate(nalphas):
-        selvox = np.nonzero(valphas==alpha)[0]
-        awt = reduce(np.dot, [Vh.T, np.diag(S/(S**2+alpha**2)), UR[:,selvox]])
-        wt[:,selvox] = awt
+        selvox = torch.nonzero(valphas==alpha).squeeze()
+        awt = reduce(torch.matmul, [Vh.T, torch.diag(S/(S**2+alpha**2)), UR[:,selvox]])
+        # print(awt.device, wt.device)
+        wt[:,selvox] = awt.to(wt.dtype).to(wt.device)
 
     return wt, valphas, allRcorrs
