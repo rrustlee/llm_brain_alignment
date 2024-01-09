@@ -1,5 +1,6 @@
 import numpy as np
 import logging
+import torch
 
 logger = logging.getLogger("text.regression.interpdata")
 
@@ -110,6 +111,38 @@ def lanczosinterp2D(data, oldtime, newtime, window=3, cutoff_mult=1.0, rectify=F
 
     return newdata
 
+def lanczosinterp2D_torch(data, oldtime, newtime, window=3, cutoff_mult=1.0, rectify=False):
+    """Interpolates the columns of [data], assuming that the i'th row of data corresponds to
+    oldtime(i). A new matrix with the same number of columns and a number of rows given
+    by the length of [newtime] is returned.
+    
+    The time points in [newtime] are assumed to be evenly spaced, and their frequency will
+    be used to calculate the low-pass cutoff of the interpolation filter.
+    
+    [window] lobes of the sinc function will be used. [window] should be an integer.
+    """
+    ## Find the cutoff frequency ##
+    cutoff = 1/np.mean(np.diff(newtime)) * cutoff_mult
+    # print "Doing lanczos interpolation with cutoff=%0.3f and %d lobes." % (cutoff, window)
+    
+    ## Build up sinc matrix ##
+    sincmat = torch.zeros((len(newtime), len(oldtime))).cuda()
+    newtime = torch.tensor(newtime).cuda()
+    oldtime = torch.tensor(oldtime).cuda()
+    data = torch.tensor(data).cuda().float()
+
+    for ndi in range(len(newtime)):
+        sincmat[ndi,:] = lanczosfun_torch(cutoff, newtime[ndi]-oldtime, window)
+    
+    if rectify:
+        newdata = np.hstack([torch.matmul(sincmat, torch.clip(data, -np.inf, 0)), 
+                            torch.matmul(sincmat, torch.clip(data, 0, np.inf))])
+    else:
+        ## Construct new signal by multiplying the sinc matrix by the data ##
+        newdata = torch.matmul(sincmat, data)
+
+    return newdata
+
 def sincupinterp2D(data, oldtime, newtimes, cutoff, window=1):
     """Uses sinc interpolation to upsample the columns of [data], assuming that the i'th
     row of data comes from oldtime[i].  A new matrix with the same number of columns
@@ -160,6 +193,19 @@ def lanczosfun(cutoff, t, window=3):
     val[t==0] = 1.0
     val[np.abs(t)>window] = 0.0
     return val# / (val.sum() + 1e-10)
+
+def lanczosfun_torch(cutoff, t, window=3):
+    """Compute the lanczos function with some cutoff frequency [B] at some time [t].
+    [t] can be a scalar or any shaped numpy array.
+    If given a [window], only the lowest-order [window] lobes of the sinc function
+    will be non-zero.
+    """
+    t = t * cutoff
+    val = window * torch.sin(torch.pi*t) * torch.sin(torch.pi*t/window) / (torch.pi**2 * t**2)
+    val[t==0] = 1.0
+    val[torch.abs(t)>window] = 0.0
+    return val# / (val.sum() + 1e-10)
+    
 
 def expinterp2D(data, oldtime, newtime, theta):
     intmat = np.zeros((len(newtime), len(oldtime)))

@@ -1,5 +1,6 @@
 import numpy as np
 import tables
+import torch
 #from matplotlib.pyplot import figure, show
 import scipy.linalg
 
@@ -12,7 +13,10 @@ def make_delayed(stim, delays, circpad=False):
     nt,ndim = stim.shape
     dstims = []
     for di,d in enumerate(delays):
-        dstim = np.zeros((nt, ndim))
+        if type(stim) is torch.Tensor:
+            dstim = torch.zeros((nt, ndim))
+        else:
+            dstim = np.zeros((nt, ndim))
         if d<0: ## negative delay
             dstim[:d,:] = stim[-d:,:]
             if circpad:
@@ -24,7 +28,12 @@ def make_delayed(stim, delays, circpad=False):
         else: ## d==0
             dstim = stim.copy()
         dstims.append(dstim)
-    return np.hstack(dstims)
+
+    if type(stim) is torch.Tensor:
+        return torch.hstack(dstims)
+    else:
+        return np.hstack(dstims)
+
 
 def best_corr_vec(wvec, vocab, SU, n=10):
     """Returns the [n] words from [vocab] most similar to the given [wvec], where each word is represented

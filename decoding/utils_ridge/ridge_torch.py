@@ -342,18 +342,21 @@ def bootstrap_ridge_torch(Rstim, Rresp, alphas, nboots, chunklen, nchunks, dtype
         valphas = np.array([bestalpha]*nvox)
         logger.info("Best alpha = %0.3f"%bestalpha)
 
-    logger.info("Computing weights for each response using entire training set..")
-    UR = torch.matmul(U.T, Rresp)
-    wt = torch.zeros((Rstim.shape[1], Rresp.shape[1]))#.cuda()
     valphas = torch.tensor(valphas).cuda()
 
-    # print(valphas.shape)
-    # print(valphas)
-    # return valphas, allRcorrs
-    for ai,alpha in enumerate(nalphas):
-        selvox = torch.nonzero(valphas==alpha).squeeze()
-        awt = reduce(torch.matmul, [Vh.T, torch.diag(S/(S**2+alpha**2)), UR[:,selvox]])
-        # print(awt.device, wt.device)
-        wt[:,selvox] = awt.to(wt.dtype).to(wt.device)
+    return None, valphas, allRcorrs
 
-    return wt, valphas, allRcorrs
+    # logger.info("Computing weights for each response using entire training set..")
+    # UR = torch.matmul(U.T, Rresp)
+    # wt = torch.zeros((Rstim.shape[1], Rresp.shape[1]))#.cuda()
+
+    # # print(valphas.shape)
+    # # print(valphas)
+    # # return valphas, allRcorrs
+    # for ai,alpha in enumerate(nalphas):
+    #     selvox = torch.nonzero(valphas==alpha).squeeze()
+    #     awt = reduce(torch.matmul, [Vh.T, torch.diag(S/(S**2+alpha**2)), UR[:,selvox]])
+    #     # print(awt.device, wt.device)
+    #     wt[:,selvox] = awt.to(wt.dtype).to(wt.device)
+
+    # return wt, valphas, allRcorrs
