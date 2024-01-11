@@ -46,11 +46,13 @@ parser.add_argument("--layer", type = int, required = True)
 parser.add_argument("--act_name", type = str, required = True)
 parser.add_argument("--window", type = int, required = True)
 parser.add_argument("--layer2", type = int, required = True)
+parser.add_argument("--chunk", type = int, default = 0)
+
 
 
 args = parser.parse_args()
 
-log_name = f'intrallm_window_{args.window}-layer_{args.layer}_{args.layer2}-{args.act_name}.txt'
+log_name = f'test_{args.window}-layer_{args.layer}_{args.layer2}-{args.act_name}.txt'
 log_dir = os.path.join(config.RESULT_DIR, log_name)
 log_file = open(log_dir, 'w')
 
@@ -91,14 +93,15 @@ def get_stim_torch(args, stories, llama, tr_stats = None, delay=True, vox=None):
     word_vecs = {}
     for story in stories:
         words = word_seqs[story].data
-        embs = llama.get_llm_act(story, words, args.window, args.act_name, args.layer)
+        embs = llama.get_llm_act(story, words, args.window, args.act_name, args.layer, chunk=args.chunk)
         word_vecs[story] = embs
-    word_mat = torch.vstack([torch.tensor(word_vecs[story]) for story in stories])
+    word_mat = torch.vstack([torch.tensor(word_vecs[story]) for story in stories]).float()
     word_mean, word_std = word_mat.mean(0), word_mat.std(0)
 
     ds_vecs = {story : lanczosinterp2D_torch(word_vecs[story], word_seqs[story].data_times, word_seqs[story].tr_times) 
                 for story in stories}
     ds_mat = torch.vstack([ds_vecs[story][5+config.TRIM:-config.TRIM] for story in stories])
+
 
     if vox is not None:
             ds_mat = ds_mat[:, vox]
@@ -116,23 +119,6 @@ def get_stim_torch(args, stories, llama, tr_stats = None, delay=True, vox=None):
     if tr_stats is None: return del_mat, (r_mean, r_std), (word_mean, word_std)
     else: return del_mat, None, None
 
-def get_resp_torch(subject, stories, stack = True, vox = None, delay=False):
-    """loads response data
-    """
-    subject_dir = os.path.join(config.DATA_TRAIN_DIR, "train_response", subject)
-    resp = {}
-    for story in stories:
-        resp_path = os.path.join(subject_dir, "%s.hf5" % story)
-        hf = h5py.File(resp_path, "r")
-        resp[story] = torch.nan_to_num(torch.tensor(hf["data"][:]))
-        if vox is not None:
-            resp[story] = resp[story][:, vox]
-        if delay:
-            resp[story] = make_delayed(resp[story], config.RESP_DELAYS)
-        hf.close()
-    if stack: return torch.vstack([resp[story] for story in stories]) 
-    else: return resp
-
 # training stories
 stories = []
 with open(os.path.join(config.DATA_TRAIN_DIR, "sess_to_story.json"), "r") as f:
@@ -143,11 +129,14 @@ for sess in args.sessions:
 stories = stories[:10]
 
 model_dir = '/ossfs/workspace/nas/gzhch/data/models/Llama-2-7b-hf'
-model = AutoModelForCausalLM.from_pretrained(
-    model_dir, 
-    device_map='auto',
-    torch_dtype=torch.float16,
-).eval()
+# model = AutoModelForCausalLM.from_pretrained(
+#     model_dir, 
+#     device_map='auto',
+#     torch_dtype=torch.float16,
+# ).eval()
+
+model = None
+
 tokenizer = AutoTokenizer.from_pretrained(model_dir)
 
 
@@ -159,7 +148,7 @@ llama = LLAMA(model, tokenizer, cache_dir)
 args2 = copy.deepcopy(args)
 args2.layer = args.layer2
 
-rstim, tr_stats, word_stats = get_stim_torch(args, stories, llama, delay=True)
+rstim, tr_stats, word_stats = get_stim_torch(args, stories, llama, delay=False)
 rresp, tr_stats, word_stats = get_stim_torch(args2, stories, llama, delay=False)
 
 rstim = rstim.cuda()
@@ -167,14 +156,14 @@ rresp = rresp.cuda()
 
 nchunks = int(np.ceil(rresp.shape[0] / 5 / config.CHUNKLEN))
 
-weights, alphas, bscorrs = bootstrap_ridge_torch(rstim, rresp, use_corr = False, alphas = config.ALPHAS,
+weights, alphas, bscorrs = bootstrap_ridge_torch(rstim, rresp, use_corr = False, alphas = np.logspace(0, 2, 10),
         nboots = config.NBOOTS, chunklen = config.CHUNKLEN, nchunks = nchunks)        
 bscorrs = bscorrs.mean(2).max(0)
 vox = np.sort(np.argsort(bscorrs)[-config.VOXELS:])
 
 del rstim, rresp
 
-stim_dict = {story : get_stim_torch(args, [story], llama, delay=True)[0] for story in stories}
+stim_dict = {story : get_stim_torch(args, [story], llama, delay=False)[0] for story in stories}
 resp_dict = {story : get_stim_torch(args2, [story], llama, delay=False)[0] for story in stories}
 
 # noise_model = torch.zeros([len(vox), len(vox)]).cuda()

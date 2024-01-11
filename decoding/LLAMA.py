@@ -55,13 +55,13 @@ class LLAMA():
             # embs = torch.stack(res[act_name])[:, :, -1].numpy()
             total_size = context_array.size(0)
 
-            if chunk is not None:
+            if chunk is not None or chunk == 0:
                 split_point = total_size // chunk
                 res = []
                 for context_array_part in torch.split(context_array, split_point):
                     res_part = ana.custom_forward(self.model, context_array_part, inspect_acts=[act_name])
                     embs_part_all_layer = torch.stack(res_part[act_name])[:, :, -1]
-                    print(embs_part_all_layer.shape)
+                    # print(embs_part_all_layer.shape)
                     del res_part
                     res.append(embs_part_all_layer)
                 embs_all_layer = torch.cat(res, dim=1).numpy()
