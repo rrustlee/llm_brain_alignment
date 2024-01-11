@@ -41,7 +41,7 @@ class LLAMA():
         return torch.tensor(story_array).long()
 
 
-    def get_llm_act(self, story, words, context_size, act_name, layer, context_token=True, use_cache=True):
+    def get_llm_act(self, story, words, context_size, act_name, layer, context_token=True, use_cache=True, chunk = None, cache_all_layer=True):
         cache_file_name = f'{story}-context_size_{context_size}-layer_{layer}-{act_name}-is_token_{context_token}.pkl'
         cache_file_path = os.path.join(self.cache_dir, cache_file_name)
         if use_cache and os.path.exists(cache_file_path):
@@ -50,11 +50,41 @@ class LLAMA():
 
         else:
             context_array = self.get_story_array(words, context_size, context_token).cuda()
-            res = ana.custom_forward(self.model, context_array, inspect_acts=[act_name])
-            embs = res[act_name][layer][:, -1].numpy()
+            # res = ana.custom_forward(self.model, context_array, inspect_acts=[act_name])
+            # embs = res[act_name][layer][:, -1].numpy()
             # embs = torch.stack(res[act_name])[:, :, -1].numpy()
-            with open(cache_file_path, 'wb') as f:
-                pickle.dump(embs, f)
+            total_size = context_array.size(0)
+
+            if chunk is not None:
+                split_point = total_size // chunk
+                res = []
+                for context_array_part in torch.split(context_array, split_point):
+                    res_part = ana.custom_forward(self.model, context_array_part, inspect_acts=[act_name])
+                    embs_part_all_layer = torch.stack(res_part[act_name])[:, :, -1]
+                    print(embs_part_all_layer.shape)
+                    del res_part
+                    res.append(embs_part_all_layer)
+                embs_all_layer = torch.cat(res, dim=1).numpy()
+                
+
+            else:
+                context_array = self.get_story_array(words, context_size, context_token).cuda()
+                res = ana.custom_forward(self.model, context_array, inspect_acts=[act_name])
+                embs_all_layer = torch.stack(res[act_name])[:, :, -1].numpy()
+            
+            del res
+
+            if cache_all_layer:
+                for l in range(embs_all_layer.shape[0]):
+                    cache_file_name = f'{story}-context_size_{context_size}-layer_{l}-{act_name}-is_token_{context_token}.pkl'
+                    cache_file_path = os.path.join(self.cache_dir, cache_file_name)
+                    with open(cache_file_path, 'wb') as f:
+                        pickle.dump(embs_all_layer[l], f)
+            else:
+                with open(cache_file_path, 'wb') as f:
+                    pickle.dump(embs_all_layer[layer], f)
+
+            embs = embs_all_layer[layer]
 
         return embs
 
