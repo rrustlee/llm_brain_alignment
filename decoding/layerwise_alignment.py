@@ -48,10 +48,9 @@ parser.add_argument("--sessions", nargs = "+", type = int,
 parser.add_argument("--act_name", type = str, default = "ffn_gate")
 parser.add_argument("--window", type = int, required = True)
 parser.add_argument("--layer", type = int)
-parser.add_argument("--runs", type = int, default = 5)
+parser.add_argument("--runs", type = int, default = 3)
 parser.add_argument("--roi", type = str, required = True)
-parser.add_argument("--chunk", type = int, default = 0)
-
+parser.add_argument("--chunk", type = int, default = 2)
 
 args = parser.parse_args()
 
@@ -85,50 +84,32 @@ cache_dir = '/ossfs/workspace/act_cache'
 llama = LLAMA(model, tokenizer, cache_dir)
 
 
-log_name = f'llama_2_7b_layer_wise-{args.window}-roi_{args.roi}.jsonl'
+log_name = f'llama_2_7b_layer_wise_norm-{args.window}-roi_{args.roi}.jsonl'
 log_dir = os.path.join(config.RESULT_DIR, log_name)
 log_file = open(log_dir, 'w')
 
 
-def get_stim_torch2(args, stories, llama, tr_stats = None, delay=True, vox=None):
+def get_stim_torch(args, stories, llama):
     word_seqs = get_story_wordseqs(stories)
     word_vecs = {}
     for story in stories:
         words = word_seqs[story].data
-        embs = llama.get_llm_act(story, words, args.window, args.act_name, args.layer, chunk=args.chunk)
+        embs = llama.get_llm_act(story, words, args.window, args.act_name, args.layer, chunk=args.chunk, cache_all_layer=False)
         word_vecs[story] = embs
-    word_mat = torch.vstack([torch.tensor(word_vecs[story]) for story in stories]).float().cuda()
-    word_mean, word_std = None, None
+    ds_mat = torch.vstack([torch.tensor(word_vecs[story]) for story in stories]).float().cuda()
+    r_mean, r_std = ds_mat.mean(0), ds_mat.std(0)
+    r_std[r_std == 0] = 1
+    
+    return ds_mat, r_mean, r_std
 
-    # ds_vecs = {story : lanczosinterp2D_torch(word_vecs[story], word_seqs[story].data_times, word_seqs[story].tr_times) 
-    #             for story in stories}
-    # ds_mat = torch.vstack([ds_vecs[story][5+config.TRIM:-config.TRIM] for story in stories])
-
-    ds_mat = word_mat
-
-
-    if vox is not None:
-            ds_mat = ds_mat[:, vox]
-
-    if tr_stats is None: 
-        r_mean, r_std = ds_mat.mean(0), ds_mat.std(0)
-        r_std[r_std == 0] = 1
-    else: 
-        r_mean, r_std = tr_stats
-    # ds_mat = torch.nan_to_num(torch.matmul((ds_mat - r_mean), torch.linalg.inv(torch.diag(r_std))))
-    if delay:
-        del_mat = make_delayed(ds_mat, config.STIM_DELAYS)
-    else:
-        del_mat = ds_mat
-    if tr_stats is None: return del_mat, (r_mean, r_std), (word_mean, word_std)
-    else: return del_mat, None, None
+def normalize(ds_mat, r_mean, r_std):
+    return torch.nan_to_num(torch.matmul((ds_mat - r_mean), torch.linalg.inv(torch.diag(r_std))))
 
 
-def layerwise_alignment(stim, resp, s_vox=None, r_vox=None, alphas=None, runs=1, n_train=1000, n_test=1000):
+def layerwise_alignment(stim, resp, s_vox=None, r_vox=None, alphas=None, runs=1, n_train=1000, n_test=500):
     pearson, p = [], []
     for run in range(runs):
         n_total = stim.shape[0]
-        n_train, n_test = 1000, 1000
         ids = random.sample(range(n_total), n_train + n_test)
 
         if s_vox is not None:
@@ -150,7 +131,7 @@ def layerwise_alignment(stim, resp, s_vox=None, r_vox=None, alphas=None, runs=1,
         elif alphas == 'adaptive':
             nchunks = int(np.ceil(tresp.shape[0] / 5 / 100))
             weights, alphas, bscorrs = bootstrap_ridge_torch(tstim, tresp, use_corr = False, alphas = np.logspace(0, 3, 10),
-                    nboots = 5, chunklen = 100, nchunks = nchunks)        
+                    nboots = 3, chunklen = 100, nchunks = nchunks)        
 
         bs_weights = ridge_torch(tstim, tresp, alphas)
         bs_weights = bs_weights.to(hstim.device).to(hstim.dtype)
@@ -170,39 +151,56 @@ layer1 = 10
 layer2 = 20
 
 args.layer = layer1
-rstim, tr_stats, word_stats = get_stim_torch2(args, stories, llama, delay=False)
 
-for layer1 in range(0, 30, 2):
-    for layer2 in range(0, 30, 2):
+# for layer1 in range(0, 31, 2):
+for layer1 in [10]:
+    rstim, r_mean, r_std = get_stim_torch(args, stories, llama)
+    rstim_norm = normalize(rstim, r_mean, r_std)
+
+    for layer2 in range(0, 31, 2):
         args2.layer = layer2
-        rresp, tr_stats, word_stats = get_stim_torch2(args2, stories, llama, delay=False)
+        rresp, r_mean, r_std = get_stim_torch(args2, stories, llama)
+        rresp_norm = normalize(rresp, r_mean, r_std)
 
         if args.roi.startswith('mean_least'):
             n_vox = int(args.roi.split(':')[1])
-            r_vox = tr_stats[0].topk(n_vox, largest=False).indices
+            r_vox = r_mean.topk(n_vox, largest=False).indices
         elif args.roi.startswith('mean_most'):
             n_vox = int(args.roi.split(':')[1])
-            r_vox = tr_stats[0].topk(n_vox, largest=True).indices
+            r_vox = r_mean.topk(n_vox, largest=True).indices
         elif args.roi.startswith('mean_th_most'):
             th = float(args.roi.split(':')[1])
-            r_vox = torch.nonzero(tr_stats[0]>th*tr_stats[0].max())[:, 0]
+            r_vox = torch.nonzero(r_mean>th*r_mean.max())[:, 0]
             n_vox = len(r_vox)
         elif args.roi.startswith('std_least'):
             n_vox = int(args.roi.split(':')[1])
-            r_vox = tr_stats[1].topk(n_vox, largest=False).indices
+            r_vox = r_std.topk(n_vox, largest=False).indices
         elif args.roi.startswith('std_most'):
             n_vox = int(args.roi.split(':')[1])
-            r_vox = tr_stats[1].topk(n_vox, largest=True).indices
+            r_vox = r_std.topk(n_vox, largest=True).indices
         elif args.roi.startswith('std_th_most'):
             th = float(args.roi.split(':')[1])
-            r_vox = torch.nonzero(tr_stats[1]>th*tr_stats[1].max())[:, 0]
+            r_vox = torch.nonzero(r_std>th*r_std.max())[:, 0]
             n_vox = len(r_vox)
         elif args.roi == 'all':
             r_vox = None
+            n_vox = 'all'
 
-        pearson, p = layerwise_alignment(rstim, rresp, s_vox=None, r_vox=r_vox, alphas='adaptive', runs=args.runs, n_train=1000, n_test=1000)
+        pearson, p = layerwise_alignment(rstim, rresp, s_vox=None, r_vox=r_vox, alphas='adaptive', runs=args.runs)
+        pearson_norm, p_norm = layerwise_alignment(rstim_norm, rresp_norm, s_vox=None, r_vox=r_vox, alphas='adaptive', runs=args.runs)
         
-        res_args = dict(roi=args.roi, layer1=layer1, layer2=layer2, window=args.window, n_vox=n_vox, pearson=pearson, p=p, peason_mean=torch.tensor(pearson).mean().item())
-        print(layer1, layer2, n_vox, torch.tensor(pearson).mean().item())
+        res_args = dict(roi=args.roi, 
+                        layer1=layer1, 
+                        layer2=layer2, 
+                        window=args.window, 
+                        n_vox=n_vox, 
+                        pearson=pearson, 
+                        p=p, 
+                        peason_mean=torch.tensor(pearson).mean().item(), 
+                        pearson_norm=pearson_norm, 
+                        p_norm=p_norm, 
+                        peason_norm_mean=torch.tensor(pearson_norm).mean().item())
+
+        print(layer1, layer2, n_vox, torch.tensor(pearson).mean().item(), torch.tensor(pearson_norm).mean().item())
         json.dump(res_args, log_file)
         log_file.write('\n')

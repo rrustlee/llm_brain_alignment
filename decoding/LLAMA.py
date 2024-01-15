@@ -55,7 +55,7 @@ class LLAMA():
             # embs = torch.stack(res[act_name])[:, :, -1].numpy()
             total_size = context_array.size(0)
 
-            if chunk is not None or chunk == 0:
+            if chunk is not None and chunk != 0:
                 split_point = total_size // chunk
                 res = []
                 for context_array_part in torch.split(context_array, split_point):
