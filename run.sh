@@ -1,62 +1,20 @@
-# python decoding/align.py --subject S1 --layer 1 --act_name layer_input --window 15
-# python decoding/align.py --subject S1 --layer 5 --act_name layer_input --window 15
-# python decoding/align.py --subject S1 --layer 9 --act_name layer_input --window 15
-# python decoding/align.py --subject S1 --layer 13 --act_name layer_input --window 15
-# python decoding/align.py --subject S1 --layer 17 --act_name layer_input --window 15
-# python decoding/align.py --subject S1 --layer 21 --act_name layer_input --window 15
-# python decoding/align.py --subject S1 --layer 25 --act_name layer_input --window 15
-# python decoding/align.py --subject S1 --layer 29 --act_name layer_input --window 15
+# for layer in 1  4  7  10  13  16  19  22  25  28 31 
+# do 
+#     for layer2 in 1  4  7  10  13  16  19  22  25  28 31 
+#     do
+#         python decoding/align_llm.py --subject S1 --layer $layer --layer2 $layer2 --act_name ffn_gate --window 15
+#         # python decoding/align_llm.py --subject S1 --layer $layer --layer2 $layer2 --act_name ffn_gate --window 240
+#     done
+# done
 
-# python decoding/align.py --subject S1 --layer 1 --act_name ffn_gate --window 15
-# python decoding/align.py --subject S1 --layer 5 --act_name ffn_gate --window 15
-# python decoding/align.py --subject S1 --layer 9 --act_name ffn_gate --window 15
-# python decoding/align.py --subject S1 --layer 13 --act_name ffn_gate --window 15
-# python decoding/align.py --subject S1 --layer 17 --act_name ffn_gate --window 15
-# python decoding/align.py --subject S1 --layer 21 --act_name ffn_gate --window 15
-# python decoding/align.py --subject S1 --layer 25 --act_name ffn_gate --window 15
-# python decoding/align.py --subject S1 --layer 29 --act_name ffn_gate --window 15
 
-# python decoding/align.py --subject S1 --layer 1 --act_name ffn --window 15
-# python decoding/align.py --subject S1 --layer 5 --act_name ffn --window 15
-# python decoding/align.py --subject S1 --layer 9 --act_name ffn --window 15
-# python decoding/align.py --subject S1 --layer 13 --act_name ffn --window 15
-# python decoding/align.py --subject S1 --layer 17 --act_name ffn --window 15
-# python decoding/align.py --subject S1 --layer 21 --act_name ffn --window 15
-# python decoding/align.py --subject S1 --layer 25 --act_name ffn --window 15
-# python decoding/align.py --subject S1 --layer 29 --act_name ffn --window 15
-
-for layer in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 
-do 
-    for layer2 in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 
-    do
-        python decoding/align_llm.py --subject S1 --layer $layer --layer2 $layer2 --act_name ffn_gate --window 15
-    done
+for window in 30 60 120
+do
+    python decoding/layerwise_alignment.py --window window --roi mean_most:1000
+    python decoding/layerwise_alignment.py --window window --roi mean_least:1000
+    python decoding/layerwise_alignment.py --window window --roi mean_th_most:0.1
+    python decoding/layerwise_alignment.py --window window --roi std_most:1000
+    python decoding/layerwise_alignment.py --window window --roi std_least:1000
+    python decoding/layerwise_alignment.py --window window --roi std_th_most:0.2
+    python decoding/layerwise_alignment.py --window window --roi all
 done
-
-# python decoding/align.py --subject S1 --layer 1 --act_name layer_input --window 10
-# python decoding/align.py --subject S1 --layer 5 --act_name layer_input --window 10
-# python decoding/align.py --subject S1 --layer 9 --act_name layer_input --window 10
-# python decoding/align.py --subject S1 --layer 13 --act_name layer_input --window 10
-# python decoding/align.py --subject S1 --layer 17 --act_name layer_input --window 10
-# python decoding/align.py --subject S1 --layer 21 --act_name layer_input --window 10
-# python decoding/align.py --subject S1 --layer 25 --act_name layer_input --window 10
-# python decoding/align.py --subject S1 --layer 29 --act_name layer_input --window 10
-
-# python decoding/align.py --subject S1 --layer 1 --act_name ffn_gate --window 10
-# python decoding/align.py --subject S1 --layer 5 --act_name ffn_gate --window 10
-# python decoding/align.py --subject S1 --layer 9 --act_name ffn_gate --window 10
-# python decoding/align.py --subject S1 --layer 13 --act_name ffn_gate --window 10
-# python decoding/align.py --subject S1 --layer 17 --act_name ffn_gate --window 10
-# python decoding/align.py --subject S1 --layer 21 --act_name ffn_gate --window 10
-# python decoding/align.py --subject S1 --layer 25 --act_name ffn_gate --window 10
-# python decoding/align.py --subject S1 --layer 29 --act_name ffn_gate --window 10
-
-# python decoding/align.py --subject S1 --layer 1 --act_name ffn --window 10
-# python decoding/align.py --subject S1 --layer 5 --act_name ffn --window 10
-# python decoding/align.py --subject S1 --layer 9 --act_name ffn --window 10
-# python decoding/align.py --subject S1 --layer 13 --act_name ffn --window 10
-# python decoding/align.py --subject S1 --layer 17 --act_name ffn --window 10
-# python decoding/align.py --subject S1 --layer 21 --act_name ffn --window 10
-# python decoding/align.py --subject S1 --layer 25 --act_name ffn --window 10
-# python decoding/align.py --subject S1 --layer 29 --act_name ffn --window 10
-
