@@ -10,11 +10,8 @@
 
 for window in 30 60 120
 do
-    python decoding/layerwise_alignment.py --window window --roi mean_most:1000
-    python decoding/layerwise_alignment.py --window window --roi mean_least:1000
-    python decoding/layerwise_alignment.py --window window --roi mean_th_most:0.1
-    python decoding/layerwise_alignment.py --window window --roi std_most:1000
-    python decoding/layerwise_alignment.py --window window --roi std_least:1000
-    python decoding/layerwise_alignment.py --window window --roi std_th_most:0.2
-    python decoding/layerwise_alignment.py --window window --roi all
+    python decoding/layerwise_alignment.py --window $window --roi all
+    python decoding/layerwise_alignment.py --window $window --roi mean_most:1000 & python decoding/layerwise_alignment.py --window $window --roi mean_least:1000
+    python decoding/layerwise_alignment.py --window $window --roi mean_th_most:0.1 & python decoding/layerwise_alignment.py --window $window --roi std_most:1000
+    python decoding/layerwise_alignment.py --window $window --roi std_least:1000 & python decoding/layerwise_alignment.py --window $window --roi std_th_most:0.2
 done
