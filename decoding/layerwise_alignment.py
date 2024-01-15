@@ -152,8 +152,8 @@ layer2 = 20
 
 args.layer = layer1
 
-# for layer1 in range(0, 31, 2):
-for layer1 in [10]:
+for layer1 in range(0, 31, 2):
+# for layer1 in [10]:
     rstim, r_mean, r_std = get_stim_torch(args, stories, llama)
     rstim_norm = normalize(rstim, r_mean, r_std)
 
