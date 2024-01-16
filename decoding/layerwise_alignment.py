@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 import time
 import h5py
 
+random.seed(42)
 
 class ARGS:
     def __init__(self):
@@ -49,7 +50,6 @@ parser.add_argument("--act_name", type = str, default = "ffn_gate")
 parser.add_argument("--window", type = int, required = True)
 parser.add_argument("--layer", type = int)
 parser.add_argument("--runs", type = int, default = 3)
-parser.add_argument("--roi", type = str, required = True)
 parser.add_argument("--chunk", type = int, default = 2)
 
 args = parser.parse_args()
@@ -84,9 +84,12 @@ cache_dir = '/ossfs/workspace/act_cache'
 llama = LLAMA(model, tokenizer, cache_dir)
 
 
-log_name = f'llama_2_7b_layer_wise_norm-{args.window}-roi_{args.roi}.jsonl'
+log_name = f'llama_2_7b_layer_wise-{args.window}.jsonl'
+log_name_norm = f'llama_2_7b_layer_wise_norm-{args.window}.jsonl'
 log_dir = os.path.join(config.RESULT_DIR, log_name)
+log_dir_norm = os.path.join(config.RESULT_DIR, log_name_norm)
 log_file = open(log_dir, 'w')
+log_file_norm = open(log_dir_norm, 'w')
 
 
 def get_stim_torch(args, stories, llama):
@@ -105,28 +108,24 @@ def get_stim_torch(args, stories, llama):
 def normalize(ds_mat, r_mean, r_std):
     return torch.nan_to_num(torch.matmul((ds_mat - r_mean), torch.linalg.inv(torch.diag(r_std))))
 
+def layerwise_alignment(stim, resp, rois, alphas='adaptive', runs=1, n_train=1000, n_test=500):
+    r_mean, r_std = resp.mean(0), resp.std(0)
+    r_std[r_std == 0] = 1
 
-def layerwise_alignment(stim, resp, s_vox=None, r_vox=None, alphas=None, runs=1, n_train=1000, n_test=500):
-    pearson, p = [], []
+    result = {}
+    for roi in rois:
+        for stat in ['std', 'weighted_std', 'pearson', 'p']:
+            result[f'{roi}-{stat}'] = []
+
     for run in range(runs):
         n_total = stim.shape[0]
         ids = random.sample(range(n_total), n_train + n_test)
 
-        if s_vox is not None:
-            current_stim = stim[:, s_vox]
-        else:
-            current_stim = stim
-
-        if r_vox is not None:
-            current_resp = resp[:, r_vox]
-        else:
-            current_resp = resp
-
-        tstim, hstim = current_stim[ids[:n_train]], current_stim[ids[n_train:]]
-        tresp, hresp = current_resp[ids[:n_train]], current_resp[ids[n_train:]]
+        tstim, hstim = stim[ids[:n_train]], stim[ids[n_train:]]
+        tresp, hresp = resp[ids[:n_train]], resp[ids[n_train:]]
 
         if alphas is None:
-            alphas = torch.tensor([100 for _ in range(current_resp.shape[-1])]).cuda()
+            alphas = torch.tensor([1 for _ in range(resp.shape[-1])]).cuda()
 
         elif alphas == 'adaptive':
             nchunks = int(np.ceil(tresp.shape[0] / 5 / 100))
@@ -136,20 +135,56 @@ def layerwise_alignment(stim, resp, s_vox=None, r_vox=None, alphas=None, runs=1,
         bs_weights = ridge_torch(tstim, tresp, alphas)
         bs_weights = bs_weights.to(hstim.device).to(hstim.dtype)
         pred = hstim.matmul(bs_weights)
-        pred = pred.cpu().numpy() 
-        hresp = hresp.cpu().numpy()
-        stat = scipy.stats.pearsonr(pred.flatten(), hresp.flatten())
-        pearson.append(stat.statistic)
-        p.append(stat.pvalue)
-    return pearson, p
-    # return torch.tensor(pearson).mean().item(), torch.tensor(pearson).std().item(), torch.tensor(p).mean().item(), torch.tensor(p).std().item()
+
+        for roi in rois:
+            if roi.startswith('mean_least'):
+                n_vox = int(roi.split(':')[1])
+                r_vox = r_mean.topk(n_vox, largest=False).indices
+            elif roi.startswith('mean_most'):
+                n_vox = int(roi.split(':')[1])
+                r_vox = r_mean.topk(n_vox, largest=True).indices
+            elif roi.startswith('mean_th_most'):
+                th = float(roi.split(':')[1])
+                r_vox = torch.nonzero(r_mean>th*r_mean.max())[:, 0]
+                n_vox = len(r_vox)
+            elif roi.startswith('std_least'):
+                n_vox = int(roi.split(':')[1])
+                r_vox = r_std.topk(n_vox, largest=False).indices
+            elif roi.startswith('std_most'):
+                n_vox = int(roi.split(':')[1])
+                r_vox = r_std.topk(n_vox, largest=True).indices
+            elif roi.startswith('std_th_most'):
+                th = float(roi.split(':')[1])
+                r_vox = torch.nonzero(r_std>th*r_std.max())[:, 0]
+                n_vox = len(r_vox)
+            elif roi == 'all':
+                r_vox = None
+                n_vox = len(r_std)
+
+            if r_vox is not None:
+                x, y = pred[:, r_vox], hresp[:, r_vox]
+            else:
+                x, y = pred, hresp
+
+            res = calculate_diff(x, y)
+            result[f'{roi}-n_vox'] = n_vox
+            for stat in ['std', 'weighted_std', 'pearson', 'p']:
+                result[f'{roi}-{stat}'].append(res[stat])
+
+        for roi in rois:
+            for stat in ['std', 'weighted_std', 'pearson', 'p']:
+                result[f'{roi}-{stat}-mean'] = torch.tensor(result[f'{roi}-{stat}']).mean().item()
+
+    return result
+
+def calculate_diff(x, y):
+    std = (x-y).std().item()
+    weighted_std = ((x-y)*y).std().item()
+    pearson = scipy.stats.pearsonr(x.reshape(-1).cpu(), y.reshape(-1).cpu())
+    return dict(std=std, weighted_std=weighted_std, pearson=pearson.statistic, p = pearson.pvalue)
 
 
 args2 = copy.deepcopy(args)
-
-layer1 = 10
-layer2 = 20
-
 
 for layer1 in range(0, 31, 2):
 # for layer1 in [10]:
@@ -162,45 +197,24 @@ for layer1 in range(0, 31, 2):
         rresp, r_mean, r_std = get_stim_torch(args2, stories, llama)
         rresp_norm = normalize(rresp, r_mean, r_std)
 
-        if args.roi.startswith('mean_least'):
-            n_vox = int(args.roi.split(':')[1])
-            r_vox = r_mean.topk(n_vox, largest=False).indices
-        elif args.roi.startswith('mean_most'):
-            n_vox = int(args.roi.split(':')[1])
-            r_vox = r_mean.topk(n_vox, largest=True).indices
-        elif args.roi.startswith('mean_th_most'):
-            th = float(args.roi.split(':')[1])
-            r_vox = torch.nonzero(r_mean>th*r_mean.max())[:, 0]
-            n_vox = len(r_vox)
-        elif args.roi.startswith('std_least'):
-            n_vox = int(args.roi.split(':')[1])
-            r_vox = r_std.topk(n_vox, largest=False).indices
-        elif args.roi.startswith('std_most'):
-            n_vox = int(args.roi.split(':')[1])
-            r_vox = r_std.topk(n_vox, largest=True).indices
-        elif args.roi.startswith('std_th_most'):
-            th = float(args.roi.split(':')[1])
-            r_vox = torch.nonzero(r_std>th*r_std.max())[:, 0]
-            n_vox = len(r_vox)
-        elif args.roi == 'all':
-            r_vox = None
-            n_vox = 'all'
+        rois = ['all', 
+                'mean_most:1000', 
+                'mean_least:1000',
+                'mean_th_most:0.1', 
+                'std_most:1000',
+                'std_least:1000',
+                'std_th_most:0.2']
 
-        pearson, p = layerwise_alignment(rstim, rresp, s_vox=None, r_vox=r_vox, alphas='adaptive', runs=args.runs)
-        pearson_norm, p_norm = layerwise_alignment(rstim_norm, rresp_norm, s_vox=None, r_vox=r_vox, alphas='adaptive', runs=args.runs)
-        
-        res_args = dict(roi=args.roi, 
-                        layer1=layer1, 
-                        layer2=layer2, 
-                        window=args.window, 
-                        n_vox=n_vox, 
-                        pearson=pearson, 
-                        p=p, 
-                        peason_mean=torch.tensor(pearson).mean().item(), 
-                        pearson_norm=pearson_norm, 
-                        p_norm=p_norm, 
-                        peason_norm_mean=torch.tensor(pearson_norm).mean().item())
-
-        print(layer1, layer2, n_vox, torch.tensor(pearson).mean().item(), torch.tensor(pearson_norm).mean().item())
-        json.dump(res_args, log_file)
+        res = layerwise_alignment(rstim, rresp, rois, alphas='adaptive', runs=args.runs, n_train=1000, n_test=1000)
+        res_norm = layerwise_alignment(rstim_norm, rresp_norm, rois, alphas='adaptive', runs=args.runs, n_train=1000, n_test=1000)
+        res.update(dict(layer1=layer1, layer2=layer2, window=args.window))
+        res_norm.update(dict(layer1=layer1, layer2=layer2, window=args.window))
+    
+        json.dump(res, log_file)
         log_file.write('\n')
+        log_file.flush()
+        json.dump(res_norm, log_file_norm)
+        log_file_norm.write('\n')
+        log_file_norm.flush()
+
+        print(layer1, layer2, res['all-pearson-mean'], res_norm['all-pearson-mean'])
