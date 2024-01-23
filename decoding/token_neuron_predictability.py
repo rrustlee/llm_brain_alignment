@@ -197,13 +197,13 @@ args2 = copy.deepcopy(args)
 
 clm_loss_aggr = get_clm_loss(args, stories, llama)
 
-# for layer1 in range(0, 31, 2):
-for layer1 in [10]:
+for layer1 in range(0, 31, 2):
+# for layer1 in [10]:
     args.layer = layer1
     rstim, r_mean, r_std = get_stim_torch(args, stories, llama)
 
-    # for layer2 in range(0, 31, 2):
-    for layer2 in [16]:
+    for layer2 in range(0, 31, 2):
+    # for layer2 in [16]:
         args2.layer = layer2
         rresp, r_mean, r_std = get_stim_torch(args2, stories, llama)
 
