@@ -40,6 +40,43 @@ class LLAMA():
             raise NotImplementError
         return torch.tensor(story_array).long()
 
+    def get_clm_loss(self, story, words, context_size, act_name='ffn_gate', context_token=True, use_cache=True, chunk = None):
+        cache_file_name = f'{story}-context_size_{context_size}-clm_loss.pkl'
+        cache_file_path = os.path.join(self.cache_dir, cache_file_name)
+        if use_cache and os.path.exists(cache_file_path):
+            with open(cache_file_path, 'rb') as f:
+                ces = pickle.load(f)
+
+        else:
+            loss_fct = torch.nn.CrossEntropyLoss(reduce=False)
+            context_array = self.get_story_array(words, context_size).cuda()
+            total_size = context_array.size(0)
+
+            if chunk is not None and chunk != 0:
+                split_point = total_size // chunk
+                res = []
+                for context_array_part in torch.split(context_array, split_point):
+                    res_part = ana.custom_forward(self.model, context_array_part, inspect_acts=[act_name])
+                    logits = res_part['logits'].cuda()
+                    labels = context_array_part.cuda()
+
+                    shift_logits = logits[..., :-1, :].contiguous().view(-1, 32000)
+                    shift_labels = labels[..., 1:].contiguous().view(-1)
+                    
+                    shift_labels = shift_labels.to(shift_logits.device)
+                    loss = loss_fct(shift_logits, shift_labels).cpu()
+                    res.append(loss.view(len(res_part['logits']), -1))
+                    del res_part
+
+                ces = torch.cat(res).numpy()
+
+            else:
+                raise('NotImplement')
+
+            with open(cache_file_path, 'wb') as f:
+                    pickle.dump(ces, f)
+
+        return ces
 
     def get_llm_act(self, story, words, context_size, act_name, layer, context_token=True, use_cache=True, chunk = None, cache_all_layer=True):
         cache_file_name = f'{story}-context_size_{context_size}-layer_{layer}-{act_name}-is_token_{context_token}.pkl'
